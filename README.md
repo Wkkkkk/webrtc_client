@@ -8,6 +8,7 @@ WebRTC is an evolving technology for peer-to-peer communication on the web. This
 
 -   [Installation](#Installation)
 -   [Usage](#Usage)
+-   [Example](#Example)
 -   [Issues](#Issues)
 -   [To Do](#To-do)
 
@@ -27,15 +28,19 @@ conda activate webrtc
 This client works out of the box with the google signaling server. By default, it connects to the live stream provided by Eyevinn.
 
 ```bash
-python3 src/web.py [--url]
+python3 web.py [--url]
 ```
+
+## Example
+<img src="./templates/example.gif" width="900" height="600" />
+
 
 ## Issues
 
-When connecting from campus network, only audio is recorded. However, both video and audio could be saved when running at home (a different network environment).
+When connecting from campus network, only audio is recorded. However, both video and audio could be accessed when running at home (a different network environment).
 
 ## To-do
 
-It now saves live stream into file, we need to play it on a plantform of our choice (web, iOS, Android, Samsung etc). 
+1. Understand the difference of network environments.
 
-We need to support ice trickle.
+2. Try object detections for fun.
