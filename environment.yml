@@ -3,9 +3,10 @@ channels:
     - defaults
 dependencies:
     - python=3
-    - python-dotenv
     - pip:
           - aiortc
           - python-socketio[asyncio_client]
           - python-socketio[client]
           - asyncio
+          - flask
+          - cv2
