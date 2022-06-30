@@ -4,6 +4,7 @@ import logging
 import aiohttp
 import threading
 import cv2
+from flask import Response, Flask, render_template
 
 from aiortc import (
     RTCIceCandidate,
@@ -12,9 +13,52 @@ from aiortc import (
     VideoStreamTrack,
 )
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
-from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
-from aiortc.contrib.signaling import BYE, add_signaling_arguments, create_signaling
+from aiortc.contrib.media import MediaBlackhole, MediaRecorder
 from av import VideoFrame
+
+# initialize the output frame and a lock used to ensure thread-safe
+# exchanges of the output frames (useful for multiple browsers/tabs
+# are viewing tthe stream)
+outputFrame = cv2.imread("default.png")
+lock = threading.Lock()
+
+# initialize a flask object
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    # return the rendered template
+    return render_template("index.html")
+
+def generate():
+    # grab global references to the output frame and lock variables
+    global outputFrame, lock
+    # loop over frames from the output stream
+    while True:
+        # wait until the lock is acquired
+        with lock:
+            # check if the output frame is available, otherwise skip
+            # the iteration of the loop
+            if outputFrame is None:
+                continue
+
+            # encode the frame in JPEG format
+            (flag, encodedImage) = cv2.imencode(".jpg", outputFrame)
+            # ensure the frame was successfully encoded
+            if not flag:
+                print("fail to encode the frame")
+                continue
+
+        # yield the output frame in the byte format
+        yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + bytearray(encodedImage) + b'\r\n')
+
+
+@app.route("/video_feed")
+def video_feed():
+    # return the response generated along with the specific media
+    # type (mime type)
+    return Response(generate(), mimetype = "multipart/x-mixed-replace; boundary=frame")
+
 
 class VideoWrapper(VideoStreamTrack):
     kind = "video"
@@ -25,6 +69,9 @@ class VideoWrapper(VideoStreamTrack):
 
 
     async def recv(self):
+        global outputFrame, lock
+        print("recv")
+
         timestamp, video_timestamp_base = await self.next_timestamp()
         frame = await self.track.recv()
         frame = frame.to_ndarray(format="bgr24")
@@ -37,6 +84,12 @@ class VideoWrapper(VideoStreamTrack):
         # frame = VideoFrame.from_ndarray(frame, format="bgr24")
         frame.pts = timestamp
         frame.time_base = video_timestamp_base
+
+        # acquire the lock, set the output frame, and release the
+        # lock
+        with lock:
+            outputFrame = frame.copy()
+
         return frame
 
 
@@ -70,7 +123,7 @@ class WHPPSession:
             self._session_url = location
 
 
-    async def connect(self, recoder):
+    async def connect(self, recorder):
         pc = RTCPeerConnection(configuration=RTCConfiguration(
             iceServers=[RTCIceServer(urls=['stun:stun.l.google.com:19302'])]))
 
@@ -106,11 +159,11 @@ class WHPPSession:
 
         # send back answer
         await self.answer(pc.localDescription)
-        await recoder.start()
+        await recorder.start()
 
 
     async def answer(self, answer):
-        print("answer:", answer)
+        # print("answer:", answer)
 
         message = {"answer": answer.sdp}
         async with session._http.put(session._session_url, 
@@ -125,13 +178,6 @@ class WHPPSession:
         
 
     async def destroy(self):
-        # if self._session_url:
-        #     message = {"janus": "destroy", "transaction": transaction_id()}
-        #     async with self._http.post(self._session_url, json=message) as response:
-        #         data = await response.json()
-        #         assert data["janus"] == "success"
-        #     self._session_url = None
-
         if self._http:
             await self._http.close()
             self._http = None
@@ -147,21 +193,28 @@ async def run(session, recorder):
     await asyncio.sleep(600)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="WebRTC client")
-    parser.add_argument("--url", required=False, default="https://broadcaster.lab.sto.eyevinn.technology:8443/broadcaster/channel/sthlm")
+    parser.add_argument("--port", required=False, default="8000")
+    parser.add_argument("--url", required=False, 
+        default="https://broadcaster.lab.sto.eyevinn.technology:8443/broadcaster/channel/sthlm")
     args = parser.parse_args()
 
     # stream url
     url = args.url
+    port = args.port
 
     # create signaling and peer connection
     session = WHPPSession(url)
 
     # create recorder for video
-    recorder = MediaRecorder("video.mp4")
+    recorder = MediaBlackhole()
 
+    # start the flask app
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)).start()
+
+    # start the rtc loop
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(
