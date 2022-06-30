@@ -70,9 +70,9 @@ class VideoWrapper(VideoStreamTrack):
 
     async def recv(self):
         global outputFrame, lock
-        print("recv")
 
-        timestamp, video_timestamp_base = await self.next_timestamp()
+        pts, time_base = await self.next_timestamp()
+
         frame = await self.track.recv()
         frame = frame.to_ndarray(format="bgr24")
 
@@ -80,15 +80,13 @@ class VideoWrapper(VideoStreamTrack):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (7, 7), 0)
 
-        frame = VideoFrame.from_ndarray(gray, format="bgr24")
-        # frame = VideoFrame.from_ndarray(frame, format="bgr24")
-        frame.pts = timestamp
-        frame.time_base = video_timestamp_base
-
-        # acquire the lock, set the output frame, and release the
-        # lock
+        # acquire the lock, set the output frame, and release the lock
         with lock:
-            outputFrame = frame.copy()
+            outputFrame = gray.copy()
+
+        frame = VideoFrame.from_ndarray(frame, format="bgr24")
+        frame.pts = pts
+        frame.time_base = time_base
 
         return frame
 
@@ -131,7 +129,8 @@ class WHPPSession:
         def on_track(track):
             print("Receiving %s" % track.kind)
             if track.kind == "video":
-                track = VideoWrapper(track)
+                t = VideoWrapper(track)
+                pc.addTrack(t)
 
             recorder.addTrack(track)
             
@@ -150,6 +149,8 @@ class WHPPSession:
         @pc.on("icegatheringstatechange")
         async def on_icegetheringstatechange():
             print("Ice gathering state is %s" % pc.iceGatheringState)
+            if pc.iceGatheringState == "complete" and pc.localDescription is not None:
+                await self.sendCandidates(pc.localDescription)
         
         await pc.setRemoteDescription(RTCSessionDescription(sdp=self._offer, type='offer'))
 
@@ -164,18 +165,28 @@ class WHPPSession:
 
     async def answer(self, answer):
         # print("answer:", answer)
-
         message = {"answer": answer.sdp}
         async with session._http.put(session._session_url, 
                                      headers={'content-type': 'application/whpp+json'}, 
                                      json=message) as response:
             # channel MUST respond with status 204 (no content)
-            assert(response.status == 204)
-            print("response:", response.status)
+            # assert(response.status == 204)
 
             if not response.ok:
-                print("error")
+                print("error:", response.status)
         
+
+    async def sendCandidates(self, candidates):
+        message = {"candidate": candidates.sdp}
+        async with session._http.patch(session._session_url, 
+                                     headers={'content-type': 'application/whpp+json'}, 
+                                     json=message) as response:
+            # channel MUST respond with status 204 (no content) or 405 (method not allowed)
+            # assert(response.status == 204 or response.status == 405)
+
+            if not response.ok:
+                print("error:", response.status)
+
 
     async def destroy(self):
         if self._http:
@@ -189,11 +200,10 @@ async def run(session, recorder):
     await session.connect(recorder)
 
     # exchange media
-    print("Exchanging media")
     await asyncio.sleep(600)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARNING)
 
     parser = argparse.ArgumentParser(description="WebRTC client")
     parser.add_argument("--port", required=False, default="8000")
@@ -209,6 +219,7 @@ if __name__ == "__main__":
     session = WHPPSession(url)
 
     # create recorder for video
+    # recorder = MediaRecorder("video.mp4")
     recorder = MediaBlackhole()
 
     # start the flask app
