@@ -19,7 +19,7 @@ from av import VideoFrame
 # initialize the output frame and a lock used to ensure thread-safe
 # exchanges of the output frames (useful for multiple browsers/tabs
 # are viewing tthe stream)
-outputFrame = cv2.imread("default.png")
+outputFrame = cv2.imread("templates/default.png")
 lock = threading.Lock()
 
 # initialize a flask object
