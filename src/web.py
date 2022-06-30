@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import logging
 import aiohttp
+import threading
+import cv2
 
 from aiortc import (
     RTCIceCandidate,
@@ -12,6 +14,30 @@ from aiortc import (
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
 from aiortc.contrib.signaling import BYE, add_signaling_arguments, create_signaling
+from av import VideoFrame
+
+class VideoWrapper(VideoStreamTrack):
+    kind = "video"
+
+    def __init__(self, track):
+        super().__init__()
+        self.track = track
+
+
+    async def recv(self):
+        timestamp, video_timestamp_base = await self.next_timestamp()
+        frame = await self.track.recv()
+        frame = frame.to_ndarray(format="bgr24")
+
+        # TODO: self-defined image processing
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (7, 7), 0)
+
+        frame = VideoFrame.from_ndarray(gray, format="bgr24")
+        # frame = VideoFrame.from_ndarray(frame, format="bgr24")
+        frame.pts = timestamp
+        frame.time_base = video_timestamp_base
+        return frame
 
 
 class WHPPSession:
@@ -51,7 +77,9 @@ class WHPPSession:
         @pc.on("track")
         def on_track(track):
             print("Receiving %s" % track.kind)
-            # if track.kind == "video":
+            if track.kind == "video":
+                track = VideoWrapper(track)
+
             recorder.addTrack(track)
             
         @pc.on("connectionstatechange")
