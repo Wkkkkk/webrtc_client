@@ -4,7 +4,10 @@ import logging
 import aiohttp
 import threading
 import cv2
+import numpy as np
 from flask import Response, Flask, render_template
+
+from tracking.cloud import *
 
 from aiortc import (
     RTCIceCandidate,
@@ -63,28 +66,30 @@ def video_feed():
 class VideoWrapper(VideoStreamTrack):
     kind = "video"
 
-    def __init__(self, track):
+    def __init__(self, track, catch_cloud):
         super().__init__()
         self.track = track
-
+        self.catch_cloud = catch_cloud
 
     async def recv(self):
         global outputFrame, lock
 
         pts, time_base = await self.next_timestamp()
-
         frame = await self.track.recv()
-        frame = frame.to_ndarray(format="bgr24")
+        img = frame.to_ndarray(format="bgr24")
 
-        # TODO: self-defined image processing
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (7, 7), 0)
+        # -------- Self-defined image processing ---------
+        if self.catch_cloud:
+            # Find clouds in the image
+            contours = find_cloud_contour(img)
+
+            # Draw some boxes
+            _res = draw_bounding_box(contours, img, 3)
 
         # acquire the lock, set the output frame, and release the lock
         with lock:
-            outputFrame = gray.copy()
+            outputFrame = img.copy()
 
-        frame = VideoFrame.from_ndarray(frame, format="bgr24")
         frame.pts = pts
         frame.time_base = time_base
 
@@ -121,7 +126,7 @@ class WHPPSession:
             self._session_url = location
 
 
-    async def connect(self, recorder):
+    async def connect(self, recorder, catch_cloud):
         pc = RTCPeerConnection(configuration=RTCConfiguration(
             iceServers=[RTCIceServer(urls=['stun:stun.l.google.com:19302'])]))
 
@@ -129,7 +134,7 @@ class WHPPSession:
         def on_track(track):
             print("Receiving %s" % track.kind)
             if track.kind == "video":
-                t = VideoWrapper(track)
+                t = VideoWrapper(track, catch_cloud)
                 pc.addTrack(t)
 
             recorder.addTrack(track)
@@ -194,10 +199,10 @@ class WHPPSession:
             self._http = None
 
 
-async def run(session, recorder):
+async def run(session, recorder, catch_cloud):
     await session.create()
 
-    await session.connect(recorder)
+    await session.connect(recorder, catch_cloud)
 
     # exchange media
     await asyncio.sleep(600)
@@ -209,11 +214,13 @@ if __name__ == "__main__":
     parser.add_argument("--port", required=False, default="8000")
     parser.add_argument("--url", required=False, 
         default="https://broadcaster.lab.sto.eyevinn.technology:8443/broadcaster/channel/sthlm")
+    parser.add_argument("--catch_cloud", required=False, default=False)
     args = parser.parse_args()
 
     # stream url
     url = args.url
     port = args.port
+    catch_cloud = args.catch_cloud
 
     # create signaling and peer connection
     session = WHPPSession(url)
@@ -229,7 +236,7 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(
-            run(session=session, recorder=recorder)
+            run(session=session, recorder=recorder, catch_cloud=catch_cloud)
         )
     except KeyboardInterrupt:
         pass
